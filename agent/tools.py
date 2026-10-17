@@ -21,7 +21,7 @@ from __future__ import annotations
 from typing import Any
 
 from agent import db
-from agent.auth import AuthContext, can_cancel_order, permission_denied
+from agent.auth import AuthContext, can_cancel_order, can_view_order, permission_denied
 from agent.helpcenter import load_policy_docs
 from agent.killswitch import kill_switch
 
@@ -334,3 +334,65 @@ def find_order(ctx: AuthContext, query: str) -> dict[str, Any]:
 
     # Step 4: return {"ok": True, "orders": [...]}  (no "count" key here).
     return {"ok": True, "orders": found}
+
+
+def get_refund_status(ctx: AuthContext, order_id: int) -> dict[str, Any]:
+    """Report every refund already requested for one order. Risk tier: read.
+
+    Our own tool (not one of the five HW1 holes). issue_refund does not check
+    for an earlier refund, and an above-threshold refund leaves the order
+    looking untouched ("delivered", refund_eligible True), so a second request
+    queues a duplicate. This tool lets the agent see what already exists
+    before it calls issue_refund.
+
+    Access matches get_order: an out-of-scope caller gets permission_denied
+    and learns nothing about the order's refunds.
+
+    Returns:
+        If no order has this id: {"ok": False, "error": "not_found", ...}.
+        Out of scope: agent.auth.permission_denied(...).
+        Otherwise: {"ok": True, "order_id": int, "already_requested": bool,
+        "refunds": [{"refund_id", "amount_usd", "status", "created_at"}],
+        "total_requested_usd": float, "order_total_usd": float,
+        "note": str}.
+    """
+    with db.connection() as conn:
+        order = db.get_order(conn, order_id)
+        if order is None:
+            return {
+                "ok": False,
+                "error": "not_found",
+                "reason": f"no order #{order_id}; ask the user to check the order number",
+            }
+        if not can_view_order(ctx, order.user_id, order.store_id):
+            return permission_denied(
+                f"role '{ctx.role}' (user {ctx.user_id}) may not view refunds for order #{order_id}"
+            )
+        rows = db.list_refunds_for_order(conn, order_id)
+
+    refunds = [
+        {
+            "refund_id": row["id"],
+            "amount_usd": row["amount_cents"] / 100,
+            "status": row["status"],
+            "created_at": row["created_at"],
+        }
+        for row in rows
+    ]
+    already_requested = len(refunds) > 0
+    if already_requested:
+        note = (
+            f"a refund has already been requested for order #{order_id}; "
+            "do not call issue_refund again. Tell the user the existing refund's status."
+        )
+    else:
+        note = f"no refund has been requested for order #{order_id}"
+    return {
+        "ok": True,
+        "order_id": order_id,
+        "already_requested": already_requested,
+        "refunds": refunds,
+        "total_requested_usd": sum(r["amount_usd"] for r in refunds),
+        "order_total_usd": order.total_usd,
+        "note": note,
+    }

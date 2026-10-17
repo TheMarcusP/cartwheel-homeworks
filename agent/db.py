@@ -249,6 +249,14 @@ def insert_refund(
     return int(cursor.lastrowid)
 
 
+def list_refunds_for_order(conn: sqlite3.Connection, order_id: int) -> list[dict[str, Any]]:
+    """Every refund recorded against one order, oldest first."""
+    rows = conn.execute(
+        "SELECT * FROM refunds WHERE order_id = ? ORDER BY id", (order_id,)
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
 def insert_escalation(
     conn: sqlite3.Connection,
     *,

@@ -69,7 +69,13 @@ or credential changes, and anything outside Cartwheel.
   call a tool without explaining first.
 - Cite the policy id (for example cw-returns) for every policy claim.
 - Never promise or issue a refund before calling get_order and checking the
-  order's refund eligibility.
+  order's refund eligibility, and calling get_refund_status to check whether
+  a refund was already requested. If one was, do not issue another; tell the
+  user its status.
+- Whenever issue_refund returns status queued_for_approval, always call
+  escalate_to_human next, even though the tool note says a human will review
+  it. Start its context with "refund_id=<refund_id> order_id=<order_id>
+  amount_usd=<amount_usd>", using the values issue_refund returned.
 
 ## Escalation
 When you are unsure, or an action is above your authority (for example a
@@ -427,6 +433,14 @@ def find_order(
     return _call(wrapper, hw_tools.find_order, query)
 
 
+@function_tool
+def get_refund_status(
+    wrapper: RunContextWrapper[AuthContext], order_id: int
+) -> dict[str, Any]:
+    """Check whether a refund was already requested for an order. Call before issue_refund."""
+    return _call(wrapper, hw_tools.get_refund_status, order_id)
+
+
 # Progressive disclosure: a session exposes only the tools its role can use.
 # Fewer tools mean fewer wrong choices and cleaner evals. At dev scale the
 # only difference is that support staff, who have no orders of their own,
@@ -436,6 +450,7 @@ _COMMON_TOOLS = [
     get_policy,
     search_products,
     get_order,
+    get_refund_status,
     issue_refund,
     cancel_order,
     escalate_to_human,
